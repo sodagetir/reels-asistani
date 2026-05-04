@@ -10,18 +10,16 @@ GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
 genai.configure(api_key=GEMINI_API_KEY)
 model = genai.GenerativeModel(model_name="gemini-2.5-flash")
 
-st.set_page_config(page_title="Reels Transkript & Çeviri Asistanı", page_icon="📝", layout="centered")
-st.title("📝 Reels Transkript Asistanı")
+st.set_page_config(page_title="Reels Çoklu Analiz Asistanı", page_icon="📝", layout="centered")
+st.title("📝 Reels Çoklu Analiz Asistanı")
 
 # --- 2. HAFIZA ---
-if "transkript" not in st.session_state:
-    st.session_state.transkript = ""
-if "ceviri" not in st.session_state:
-    st.session_state.ceviri = ""
+if "sonuclar" not in st.session_state:
+    st.session_state.sonuclar = []
 
 # --- 3. VİDEO İNDİRİCİ FONKSİYON ---
-def videoyu_indir(link):
-    dosya_adi = "gecici_reel.mp4"
+def videoyu_indir(link, index):
+    dosya_adi = f"gecici_reel_{index}.mp4"
     if os.path.exists(dosya_adi):
         os.remove(dosya_adi)
         
@@ -38,54 +36,86 @@ def videoyu_indir(link):
         return None
 
 # --- 4. ARAYÜZ VE AKIŞ ---
-st.write("Instagram Reel linkini yapıştır, sistem videoyu Gemini'a dinletip sana hem orijinal dökümü hem de doğal Türkçe çevirisini tek seferde versin.")
-reel_linki = st.text_input("Instagram Reel Linkini Buraya Yapıştır:")
+st.write("Instagram Reel linklerini her satıra BİR TANE gelecek şekilde alt alta yapıştır. Asistan sırayla hepsini analiz etsin.")
+linkler_metni = st.text_area("Linkleri Buraya Yapıştır (Alt alta):", height=150)
 
-if st.button("🎙️ Transkripti ve Çeviriyi Çıkar", use_container_width=True):
-    if reel_linki:
-        with st.spinner("1/3: Meta kalkanları aşılıyor, video indiriliyor..."):
-            video_yolu = videoyu_indir(reel_linki)
+if st.button("🎙️ Toplu Analizi Başlat", use_container_width=True, type="primary"):
+    if linkler_metni.strip():
+        # Satır satır ayır ve boş olanları çöpe at
+        linkler = [link.strip() for link in linkler_metni.split('\n') if link.strip()]
+        st.session_state.sonuclar = [] # Önceki sonuçları temizle
+        
+        ilerleme_cubugu = st.progress(0)
+        durum_metni = st.empty()
+        
+        for index, link in enumerate(linkler):
+            durum_metni.info(f"⏳ Video {index + 1} / {len(linkler)} işleniyor...")
             
-        if video_yolu:
-            with st.spinner("2/3: Gemini videoyu dinliyor ve orijinal deşifreyi çıkarıyor..."):
+            video_yolu = videoyu_indir(link, index)
+            
+            if video_yolu:
                 yuklenen_video = genai.upload_file(path=video_yolu)
                 
                 while yuklenen_video.state.name == "PROCESSING":
                     time.sleep(2)
                     yuklenen_video = genai.get_file(yuklenen_video.name)
                     
-                # 1. Aşama: Saf Transkript Çıkarımı
-                transkript_prompt = "Lütfen bu videodaki konuşmaların kelimesi kelimesine tam dökümünü (transkriptini) çıkar. Hiçbir yorum, özet veya ekstra açıklama ekleme. Sadece konuşulanları yaz."
+                # 1. Aşama: Transkript
+                transkript_prompt = "Lütfen bu videodaki konuşmaların kelimesi kelimesine tam dökümünü (transkriptini) çıkar. Başında, sonunda veya içinde hiçbir yorum, özet, merhaba veya ekstra açıklama ekleme. SADECE konuşulanları yaz."
                 ilk_cevap = model.generate_content([yuklenen_video, transkript_prompt])
-                st.session_state.transkript = ilk_cevap.text
+                transkript_metni = ilk_cevap.text
                 
-            with st.spinner("3/3: Metin analiz ediliyor ve doğal Türkçeye çevriliyor..."):
-                # 2. Aşama: Doğrudan Çeviriye Geçiş (Buton beklemeden)
+                # 2. Aşama: Çeviri
                 ceviri_prompt = f"""
                 Sen usta bir çevirmen ve dilbilimcisin. Aşağıdaki metni, bağlamını, duygusunu ve tonunu koruyarak çok doğal bir Türkçeye çevir. 
                 Kelimesi kelimesine robotik (Google Translate tarzı) bir çeviri KESİNLİKLE YAPMA. 
                 Eğer deyimler, metaforlar veya kültürel vurgular varsa, bunları Türkçedeki en doğal karşılıklarıyla uyarla. Metin akıcı, tok ve anlaşılır olmalı.
                 
+                ÇOK ÖNEMLİ KURAL: Çevirinin başına veya sonuna HİÇBİR açıklama, giriş veya laga luga ekleme. SADECE VE SADECE çevrilmiş metni ver.
+                
                 ÇEVRİLECEK METİN:
-                {st.session_state.transkript}
+                {transkript_metni}
                 """
                 ikinci_cevap = model.generate_content(ceviri_prompt)
-                st.session_state.ceviri = ikinci_cevap.text
+                ceviri_metni = ikinci_cevap.text
                 
-            st.rerun() # Tüm işlemler bitince sayfayı yenile ve sonuçları göster
-        else:
-            st.error("HATA: Video indirilemedi. Gizli bir hesap olabilir veya Meta engelledi.")
+                # Sonucu kaydet
+                st.session_state.sonuclar.append({
+                    "video_no": index + 1,
+                    "link": link,
+                    "transkript": transkript_metni,
+                    "ceviri": ceviri_metni,
+                    "hata": False
+                })
+            else:
+                # Video inmezse hata kaydet
+                st.session_state.sonuclar.append({
+                    "video_no": index + 1,
+                    "link": link,
+                    "hata": True
+                })
+            
+            # İlerlemeyi güncelle
+            ilerleme_cubugu.progress((index + 1) / len(linkler))
+            
+        durum_metni.success(f"✅ {len(linkler)} videonun analizi tamamlandı!")
     else:
-        st.warning("Lütfen bir link yapıştır.")
+        st.warning("Lütfen en az bir link yapıştır.")
 
-# İşlemler bittiyse sonuçları ekrana bas
-if st.session_state.transkript and st.session_state.ceviri:
-    st.success("✅ İşlem Tamam! İşte sonuçlar:")
-    
-    st.info("🇹🇷 Doğal Türkçe Çeviri:")
-    st.text_area("Kopyalamak için:", st.session_state.ceviri, height=250)
-    
+# --- 5. SONUÇLARI EKRANA BASMA (Açılır Kapanır Kutularla) ---
+if st.session_state.sonuclar:
     st.divider()
+    st.subheader("📊 Analiz Sonuçları")
     
-    st.write("🌐 Orijinal Transkript:")
-    st.text_area("Kaynak Metin:", st.session_state.transkript, height=150)
+    for sonuc in st.session_state.sonuclar:
+        # Her video için bir açılır-kapanır kutu oluştur
+        with st.expander(f"🎬 Video {sonuc['video_no']} (Tıklayıp açın)", expanded=False):
+            st.caption(f"Kaynak Link: {sonuc['link']}")
+            
+            if sonuc["hata"]:
+                st.error("❌ Bu video indirilemedi. Gizli hesap veya Meta engeli olabilir.")
+            else:
+                st.markdown("**🇹🇷 Çeviri:**")
+                st.info(sonuc["ceviri"])
+                st.markdown("**🌐 Orijinal Transkript:**")
+                st.write(sonuc["transkript"])
